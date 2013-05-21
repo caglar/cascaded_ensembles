@@ -11,44 +11,46 @@ class ProbMode(object):
 
 class Detector(object):
     """
-        Base class for the detectors.
+    Base class for the detectors.
     """
     def perform_detection(self, dataset):
         pass
 
 class Ensemble(object):
     """
-        Base class for Ensemble training, like boosting, ...etc.
+    Base class for Ensemble training, like boosting, ...etc.
     """
     def __init__(self, n_predictors, reject_probability):
         pass
 
     """
-        Add a new predictor to the dictionary
+    Add a new predictor to the dictionary
     """
     def add_predictor(self, predictor):
         pass
 
     """
-        Get the prediction of the ensemble
+    Get the prediction of the ensemble
     """
     def get_prediction(self):
         pass
 
     """
-        Train the ensembles.
+    Train the ensembles.
     """
     def train_predictors(self):
         pass
 
 class CascadedDetectorEnsembles(Ensemble, Detector):
     """
-        Cascaded ensembles class.
-        Params:
-            n_predictors: Number of predictors in the ensemble.
-            init_reject_probability: The reject probability of the first predictor.
-            prob_gen_mode: The mode to gene.
-            output_map_shp: The shape of the output map. 3D tensor that has the dimensions: (x, y, batch_size)
+    Cascaded ensembles class.
+
+    Parameters:
+    ---------
+    n_predictors: Number of predictors in the ensemble.
+    init_reject_probability: The reject probability of the first predictor.
+    prob_gen_mode: The mode to gene.
+    output_map_shp: The shape of the output map. 3D tensor that has the dimensions: (x, y, batch_size)
     """
     def __init__(self,
             n_predictors,
@@ -87,7 +89,12 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
         self.img_shape = img_shape
 
     """
-        Setup the output map.
+    Setup the convolutional output map of the neural network.
+
+    Parameters
+    ----------
+    output_map_shp: list
+    The shape of output map of the neural net.
     """
     def setup_output_map(self, output_map_shp=None):
         if output_map_shp is None:
@@ -95,15 +102,26 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
         pre_output_map = np.ones(output_map_shp)
 
     """
-        Add a new predictor to the class.
+    Add a new predictor to the class.
+
+    Parameters
+    -----------
+    predictor: Predictor
+    train_algo: Training algorithm of the ensemble.
     """
     def add_predictor(self, predictor, train_algo):
         assert predictor is not None
+        assert train_algo is not None
         self.predictors.append(predictor)
         self.training_algos.append(train_algo)
 
     """
-        Get the prediction of the predictor.
+    Get the prediction of the predictor.
+
+    Parameters:
+    ----------
+    n_predictor_no: The predictor's index.
+    dataset: The dataset class for the training.
     """
     def get_predictor_prediction(self, n_predictor_no, dataset):
         assert dataset.X is not None
@@ -111,7 +129,7 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
         return self.predictors[n_predictor_no].get_posteriors(dataset)
 
     """
-        Classify the instance in the cascade.
+    Classify the instance in the cascade.
     """
     def classify(self, dataset):
         assert dataset.X is not None
@@ -150,8 +168,8 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
                 self.predictors[i].train(dataset.X, dataset.y, facemap=face_map)
 
     """
-        Perform the detection on the images. Similar to training at each level of the cascade
-        perform thresholding and non-maximum suppression.
+    Perform the detection on the images. Similar to training at each level of the cascade
+    perform thresholding and non-maximum suppression.
     """
     def perform_detection(self, dataset):
         assert dataset is not None
@@ -168,13 +186,13 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
         return posteriors
 
     """
-        Check the non maximum supression with threshold.
-        Explanation:
-            Karim proposed a precise procedure which is standard for this: sort the outputs (for
-            different locations in the same image) in decreasing order of probability (keeping only those
-            above a threshold). Traverse that list from highest face probability down.
-            For each entry, remove the entries below that correspond to locations that are too
-            close spatially (corresponding to more than 50% overlap of the bounding boxes).
+    Check the non maximum supression with threshold.
+    Explanation:
+        Karim proposed a precise procedure which is standard for this: sort the outputs (for
+        different locations in the same image) in decreasing order of probability (keeping only those
+        above a threshold). Traverse that list from highest face probability down.
+        For each entry, remove the entries below that correspond to locations that are too
+        close spatially (corresponding to more than 50% overlap of the bounding boxes).
 
     """
     def _check_threshold_non_max_suppression(self, probs, threshold, radius):
@@ -220,7 +238,7 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
         return new_preds
 
     """
-        Check the non maximum supression.
+    Check the non maximum supression.
     """
     def _check_non_max_suppression(self, probs):
         batch_size = self.output_map_shp[-1]
@@ -231,16 +249,23 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
             pred_pos = pred_pos[pred_pos[:,1].argsort()]
 
     """
-        Check the threshold for the images
+    Check the threshold for the images
     """
     def _check_threshold(self, outputs, threshold):
         outputs[outputs < threshold] = 0
         return outputs
 
-class ConvolutionalCascadeMemberTrainer(CascadedDetectorEnsembles):
+class ConvolutionalCascadeMemberTrainer(object):
 
     """
-        Convolutional cascade trainer.
+    Convolutional cascade trainer class.
+
+    Parameters:
+    ----------
+    sparsity_level: The sparsity level for the convolutional training.
+    receptive_field_size: The size of the receptive field.
+    save_path: The path to save the pylearn2 pickle files.
+    train_extensions: Pylearn2 training extensions
     """
     def __init__(self, sparsity_level=0.5, receptive_field_size=None, save_path=None,
             train_extensions=None):
@@ -253,7 +278,7 @@ class ConvolutionalCascadeMemberTrainer(CascadedDetectorEnsembles):
         self.train_extensions = None
 
     """
-        Set the default model of the algorithm.
+    Set the default model and the algorithm of the trainer class.
     """
     def set_model(self, model, algorithm, trainset):
         self.model = model
@@ -266,7 +291,7 @@ class ConvolutionalCascadeMemberTrainer(CascadedDetectorEnsembles):
                 extensions = self.train_extensions, dataset = trainset)
 
     """
-        Train the convolutional cascade member.
+    Train the convolutional cascade member.
     """
     def facemap_train(self, facemap=None):
 
@@ -296,13 +321,13 @@ class ConvolutionalCascadeMemberTrainer(CascadedDetectorEnsembles):
                         self.trainer.dataset = self.dataset
                         self.trainer.main_loop()
     """
-        Train the cascade on the whole image.
+    Train the cascade on the whole image.
     """
     def train(self):
         self.trainer.main_loop()
 
     """
-        Perform forward prop.
+    Perform forward prop.
     """
     def fprop(self, X):
         below = X
