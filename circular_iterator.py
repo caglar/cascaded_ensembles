@@ -1,3 +1,6 @@
+"""
+    Iterator to iterate over the image, in a circular way.
+"""
 def circle_around(x, y):
     r = 1
     i, j = x-1, y-1

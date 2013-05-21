@@ -1,4 +1,4 @@
-import numpy
+import numpy as np
 import theano
 import theano.tensor as T
 
@@ -56,13 +56,15 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
             prob_gen_mode=ProbMode.LIN_INTERP,
             reject_probabilities=None,
             img_shape = None,
+            non_max_radius = None,
             output_map_shp=None):
 
         self.n_predictors = n_predictors
         self.reject_probabilities = []
         self.predictors = []
-        self.train_algos = []
-        self.output_map = None
+        self.training_algos = []
+        self.output_map_shp = output_map_shp
+        self.non_max_radius = non_max_radius
 
         assert output_map_shp is not None, ("Output map should not be left empty.")
         assert init_reject_probability <= 1.0, ("Initial reject probability should be less than or equal to 1.")
@@ -77,8 +79,8 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
                 self.reject_probabilities.append(init_reject_probability)
         else:
             raise Exception("Invalid cascade probability generation mode is selected.")
-        self.preds_size = numpy.prod(output_map_shp[0:2])
-        dop = numpy.arange(self.preds_size)
+        self.preds_size = np.prod(output_map_shp[0:2])
+        dop = np.arange(self.preds_size)
         dop = dop.reshape((dop.reshape[0], 1))
         self.data_predictor_positions = dop
         self.setup_output_map(output_map_shp=output_map_shp)
@@ -90,7 +92,7 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
     def setup_output_map(self, output_map_shp=None):
         if output_map_shp is None:
             raise Exception("Shape of the output map should not be empty.")
-        pre_output_map = numpy.ones(size=output_map_shp)
+        pre_output_map = np.ones(output_map_shp)
 
     """
         Add a new predictor to the class.
@@ -103,17 +105,26 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
     """
         Get the prediction of the predictor.
     """
-    def get_predictor_prediction(self, n_predictor_no, X):
-        assert X is not None
+    def get_predictor_prediction(self, n_predictor_no, dataset):
+        assert dataset.X is not None
         assert self.predictors[n_predictor_no] is not None, ("The requested predictor couldn't be found.")
-        return self.predictors[n_predictor_no].get_posteriors(X)
+        return self.predictors[n_predictor_no].get_posteriors(dataset)
 
     """
-        Get the prediction of the cascade.
+        Classify the instance in the cascade.
     """
-    def get_prediction(self, X):
-        assert X is not None
-        return self.predictors[n_predictor_no].get_posteriors()
+    def classify(self, dataset):
+        assert dataset.X is not None
+        predictions = self.perform_detection(dataset)
+        X = dataset.X
+        results = np.all(X==0., axis=0)
+        classifications = []
+        for res in results:
+            if res:
+                classifications.append(-1)
+            else:
+                classifications.append(1)
+        return classifications
 
     """
     Train the predictors.
@@ -127,12 +138,15 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
     """
     def train_predictors(self, dataset=None):
         assert dataset is not None, "Dataset should not be empty"
+        radius = self.non_max_radius
         for i in xrange(self.n_predictors):
             if i == 0:
                 self.predictors[i].train(dataset.X, dataset.y)
             else:
-                posteriors = self.predictors[i-1].get_posteriors(X)
-                face_map = self._check_threshold_non_max_supression(posteriors)
+                reject_prob = self.reject_probabilities[i]
+                posteriors = self.predictors[i-1].get_posteriors(dataset)
+                face_map = self._check_threshold_non_max_suppression(posteriors,
+                        threshold=reject_prob, radius=radius)
                 self.predictors[i].train(dataset.X, dataset.y, facemap=face_map)
 
     """
@@ -141,12 +155,15 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
     """
     def perform_detection(self, dataset):
         assert dataset is not None
+        radius = self.non_max_radius
         for i in xrange(self.n_predictors):
             if i == 0:
                 self.predictors[i].train(dataset.X, dataset.y)
             else:
-                posteriors = self.predictors[i-1].get_posteriors(X)
-                face_map = self._check_threshold_non_max_supression(posteriors)
+                reject_prob = self.reject_probabilities[i]
+                posteriors = self.predictors[i-1].get_posteriors(dataset)
+                face_map = self._check_threshold_non_max_suppression(posteriors,
+                        threshold=reject_prob, radius=radius)
                 posteriors = self.predictors[i].get_posteriors(dataset.X, dataset.y, facemap=face_map)
         return posteriors
 
@@ -168,14 +185,14 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
         processed_probs = []
 
         for i in xrange(batch_size):
-            dop = numpy.copy(self.data_predictor_positions)
-            preds = numpy.reshape((probs[i].shape[0], 1))
-            pred_pos = numpy.vstack((dop, preds))
+            dop = np.copy(self.data_predictor_positions)
+            preds = np.reshape(probs[i], (probs[i].shape[0], 1))
+            pred_pos = np.vstack((dop, preds))
             pred_pos = pred_pos[pred_pos[:,1].argsort()]
             sorted_preds = pred_pos[:, 1]
 
             border = 0
-            new_preds = numpy.zeros()
+            new_preds = np.zeros()
             for j in xrange(self.preds_size):
                 preds_view = preds.reshape(self.output_map_shp[:2])
                 if sorted_preds[j] < threshold:
@@ -185,9 +202,9 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
                     #within radius neighbourhood.
                     #The problem is that the spatially close outputs might be corresponding to the same face.
                     #Rows:
-                    r = j % self.output_shape[1]
+                    r = j % self.output_map_shp[1]
                     #Columns:
-                    c = j - r*self.output_shape[1]
+                    c = j - r*self.output_map_shp[1]
                     iterator = circle_around(r, c)
                     #Move on the grid in a circular fashion
                     for loc in iterator:
@@ -208,9 +225,9 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
     def _check_non_max_suppression(self, probs):
         batch_size = self.output_map_shp[-1]
         for i in xrange(batch_size):
-            dop = numpy.copy(self.data_predictor_positions)
-            preds = numpy.reshape((probs[i].shape[0], 1))
-            pred_pos = numpy.vstack((dop, preds))
+            dop = np.copy(self.data_predictor_positions)
+            preds = np.reshape(dop, (probs[i].shape[0], 1))
+            pred_pos = np.vstack((dop, preds))
             pred_pos = pred_pos[pred_pos[:,1].argsort()]
 
     """
@@ -220,7 +237,7 @@ class CascadedDetectorEnsembles(Ensemble, Detector):
         outputs[outputs < threshold] = 0
         return outputs
 
-class ConvolutionalCascadeMemberTrainer(CascadedEnsembles):
+class ConvolutionalCascadeMemberTrainer(CascadedDetectorEnsembles):
 
     """
         Convolutional cascade trainer.
@@ -233,20 +250,20 @@ class ConvolutionalCascadeMemberTrainer(CascadedEnsembles):
         self.receptive_field_size = receptive_field_size
         self.save_path = save_path
         self.trainer = None
-        self.train_extentions = None
+        self.train_extensions = None
 
     """
         Set the default model of the algorithm.
     """
-    def set_model(self, model, algortihm, trainset):
+    def set_model(self, model, algorithm, trainset):
         self.model = model
         self.algorithm = algorithm
         if self.save_path is None:
             self.save_path = model.name + ".pkl"
         self.dataset = trainset
-        self.trainer = Train(model = model, algorithm = train_algo,
-                                 save_path=self.save_path, save_freq=1,
-                                 extensions = self.train_extensions, dataset = trainset)
+        self.trainer = Train(model = self.model, algorithm = algorithm,
+                save_path=self.save_path, save_freq=1,
+                extensions = self.train_extensions, dataset = trainset)
 
     """
         Train the convolutional cascade member.
@@ -260,7 +277,7 @@ class ConvolutionalCascadeMemberTrainer(CascadedEnsembles):
         def check_sparsity(facemap=None):
             if facemap is None:
                 raise Exception("Facemap shouldn't be empty.")
-            sparse_vals = numpy.where(facemap==0.)
+            sparse_vals = np.where(facemap==0.)
             n_sparse_vals = sparse_vals[0].shape[0]
             n_vals = facemap.shape[0]
             sparsity_level = float(n_sparse_vals) / float(n_vals)
@@ -290,7 +307,7 @@ class ConvolutionalCascadeMemberTrainer(CascadedEnsembles):
     def fprop(self, X):
         below = X
         outputs = []
-        for layer in model.layers:
+        for layer in self.model.layers:
             above = layer.fprop(below)
             below = above
             outputs.append(above)
@@ -306,12 +323,13 @@ class ConvolutionalCascadeMemberTrainer(CascadedEnsembles):
         X = input_space.make_theano_batch()
         if X.ndim > 2:
             assert False # doesn't support topo yets
-        batch_size = self.batch_size
-        fn = function([X], outputs)
+        outputs = self.fprop(X)
+        batch_size = self.model.batch_size
+        fn = theano.function([X], outputs)
         act = []
-        for i in xrange(0, min(batch_size * max_batches, X.shape[0]), batch_size):
+        for i in xrange(0, X.shape[0], batch_size):
             batch = X[i:i+batch_size,:]
-            batch_act = f(batch)
+            batch_act = fn(batch)
             batch_act = np.concatenate([elem.reshape(elem.size) for elem in batch_act],axis=0)
             act.append(batch_act)
         act = np.concatenate(act, axis=0)
